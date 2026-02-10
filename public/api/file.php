@@ -20,6 +20,12 @@ if (!is_file($path)) {
 }
 
 $mime = mime_content_type($path) ?: 'application/octet-stream';
+$download = isset($_GET['download']) && $_GET['download'] === '1';
+$asciiFilename = addcslashes($name, "\"\\");
+
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . (string) filesize($path));
+if ($download) {
+    header('Content-Disposition: attachment; filename="' . $asciiFilename . '"; filename*=UTF-8\'\'' . rawurlencode($name));
+}
 readfile($path);

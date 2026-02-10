@@ -31,9 +31,13 @@ if ($appBasePath === '' || $appBasePath === '.') {
     .broken { color: #ff6f6f; }
     dialog { border: 1px solid #4d576f; border-radius: 10px; width: min(96vw, 1100px); background: #11151d; color: #fff; }
     dialog::backdrop { background: rgba(0,0,0,.7); }
-    .modal-head { display:flex; justify-content: space-between; align-items:center; padding:8px 0; }
+    .modal-head { display:flex; justify-content: space-between; align-items:center; padding:8px 0; gap: 12px; }
+    .modal-content { display: grid; gap: 8px; }
     .modal-content img { max-width: 100%; max-height: 80vh; display:block; margin:0 auto; }
-    button { padding: 6px 10px; border-radius: 8px; border: 1px solid #555; background: #1e2430; color: #fff; cursor: pointer; }
+    .meta { font-size: 12px; opacity: 0.8; text-align: center; }
+    .modal-actions { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+    .hint { font-size: 12px; opacity: 0.75; margin: 0; text-align: center; }
+    button, .button-link { padding: 6px 10px; border-radius: 8px; border: 1px solid #555; background: #1e2430; color: #fff; cursor: pointer; text-decoration: none; display: inline-block; }
   </style>
 </head>
 <body data-app-base="<?= htmlspecialchars($appBasePath, ENT_QUOTES, 'UTF-8') ?>">
@@ -120,6 +124,12 @@ if ($appBasePath === '' || $appBasePath === '.') {
       return card;
     }
 
+    function buildDownloadUrl(sourceUrl) {
+      if (!sourceUrl) return '';
+      const separator = sourceUrl.includes('?') ? '&' : '?';
+      return `${sourceUrl}${separator}download=1`;
+    }
+
     function openViewer(item) {
       viewerName.textContent = item.filename;
       viewerContent.innerHTML = '';
@@ -128,12 +138,38 @@ if ($appBasePath === '' || $appBasePath === '.') {
         const img = document.createElement('img');
         img.src = item.previewUrl;
         img.alt = item.filename;
+        img.loading = 'eager';
         img.addEventListener('error', () => {
           viewerContent.innerHTML = '<p class="broken">プレビューの読み込みに失敗しました。</p>';
         });
         viewerContent.appendChild(img);
       } else {
         viewerContent.innerHTML = `<p>${item.thumbnailMessage || 'プレビューなし'}</p>`;
+      }
+
+      if (item.takenAt && item.takenAt.value) {
+        const takenAt = document.createElement('small');
+        takenAt.className = 'meta';
+        takenAt.textContent = `撮影日時: ${item.takenAt.value}`;
+        viewerContent.appendChild(takenAt);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'modal-actions';
+
+      const downloadLink = document.createElement('a');
+      downloadLink.className = 'button-link';
+      downloadLink.href = buildDownloadUrl(item.sourceUrl);
+      downloadLink.textContent = '元データをダウンロード';
+      downloadLink.setAttribute('download', item.filename);
+      actions.appendChild(downloadLink);
+      viewerContent.appendChild(actions);
+
+      if (item.type === 'image') {
+        const hint = document.createElement('p');
+        hint.className = 'hint';
+        hint.textContent = '画像は表示後に長押しして保存できます（端末の保存先はOS仕様に依存）。';
+        viewerContent.appendChild(hint);
       }
 
       viewer.showModal();

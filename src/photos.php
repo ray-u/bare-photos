@@ -58,6 +58,7 @@ function buildPhotoEntry(string $filename, string $extension, bool $isImage, boo
 {
     $thumbInfo = resolveThumbnail($filename, $extension, $isImage, $isRaw);
     $apiBase = currentApiBasePath();
+    $takenAt = resolveTakenAt($filename, $isRaw);
 
     return [
         'filename' => $filename,
@@ -68,6 +69,7 @@ function buildPhotoEntry(string $filename, string $extension, bool $isImage, boo
         'thumbnailMessage' => $thumbInfo['message'],
         'previewUrl' => $thumbInfo['previewUrl'],
         'sourceUrl' => $apiBase . '/file.php?name=' . rawurlencode($filename),
+        'takenAt' => $takenAt,
     ];
 }
 
@@ -82,7 +84,14 @@ function resolveThumbnail(string $filename, string $extension, bool $isImage, bo
 
     if (is_file($thumbPath)) {
         $status = 'ready';
-        return ['url' => $thumbUrl, 'status' => $status, 'message' => '', 'previewUrl' => $thumbUrl];
+        $previewUrl = $thumbUrl;
+        if ($isRaw) {
+            $sidecarPreview = findSidecarPreviewImage($filename);
+            if ($sidecarPreview !== null) {
+                $previewUrl = $apiBase . '/file.php?name=' . rawurlencode($sidecarPreview);
+            }
+        }
+        return ['url' => $thumbUrl, 'status' => $status, 'message' => '', 'previewUrl' => $previewUrl];
     }
 
     if ($isImage) {
@@ -96,16 +105,20 @@ function resolveThumbnail(string $filename, string $extension, bool $isImage, bo
 
     if ($isRaw) {
         $rawPath = photoPath($filename);
-        $generated = generateThumbnailFromRaw($rawPath, $thumbPath);
+        $generated = generateThumbnailFromRaw($filename, $rawPath, $thumbPath);
 
-        if ($generated) {
-            return ['url' => $thumbUrl, 'status' => 'ready', 'message' => '', 'previewUrl' => $thumbUrl];
+        if ($generated['generated']) {
+            $previewUrl = $thumbUrl;
+            if ($generated['previewFilename'] !== null) {
+                $previewUrl = $apiBase . '/file.php?name=' . rawurlencode($generated['previewFilename']);
+            }
+            return ['url' => $thumbUrl, 'status' => 'ready', 'message' => '', 'previewUrl' => $previewUrl];
         }
 
         return [
             'url' => null,
             'status' => 'unavailable',
-            'message' => 'RAWサムネ生成不可（ExifToolまたはRAW現像環境が必要）',
+            'message' => 'RAWサムネ生成不可（同名JPG/JPEGまたはExifToolが必要）',
             'previewUrl' => null,
         ];
     }
@@ -213,11 +226,19 @@ function downscaleSize(int $width, int $height, int $maxEdge): array
     return [max(1, (int) floor($width * $scale)), max(1, (int) floor($height * $scale))];
 }
 
-function generateThumbnailFromRaw(string $rawPath, string $targetPath): bool
+/**
+ * @return array{generated:bool,previewFilename:?string}
+ */
+function generateThumbnailFromRaw(string $rawFilename, string $rawPath, string $targetPath): array
 {
+    $sidecarPreview = findSidecarPreviewImage($rawFilename);
+    if ($sidecarPreview !== null && generateThumbnailFromImage(photoPath($sidecarPreview), $targetPath)) {
+        return ['generated' => true, 'previewFilename' => $sidecarPreview];
+    }
+
     $tempPreview = tempnam(sys_get_temp_dir(), 'raw_preview_');
     if ($tempPreview === false) {
-        return false;
+        return ['generated' => false, 'previewFilename' => null];
     }
 
     $commands = [
@@ -226,12 +247,14 @@ function generateThumbnailFromRaw(string $rawPath, string $targetPath): bool
     ];
 
     foreach ($commands as $command) {
+        $output = [];
+        $code = 1;
         @exec($command, $output, $code);
         if ($code === 0 && is_file($tempPreview) && filesize($tempPreview) > 0 && @getimagesize($tempPreview)) {
             $generated = generateThumbnailFromImage($tempPreview, $targetPath);
             @unlink($tempPreview);
             if ($generated) {
-                return true;
+                return ['generated' => true, 'previewFilename' => null];
             }
         }
         file_put_contents($tempPreview, '');
@@ -239,7 +262,97 @@ function generateThumbnailFromRaw(string $rawPath, string $targetPath): bool
 
     @unlink($tempPreview);
 
-    return false;
+    return ['generated' => false, 'previewFilename' => null];
+}
+
+function findSidecarPreviewImage(string $rawFilename): ?string
+{
+    $baseName = pathinfo($rawFilename, PATHINFO_FILENAME);
+    foreach (['jpg', 'jpeg', 'JPG', 'JPEG'] as $extension) {
+        $candidate = $baseName . '.' . $extension;
+        if (is_file(photoPath($candidate))) {
+            return $candidate;
+        }
+    }
+
+    return null;
+}
+
+/**
+ * @return array{value:?string,source:string}
+ */
+function resolveTakenAt(string $filename, bool $isRaw): array
+{
+    $path = photoPath($filename);
+    $fromExif = resolveTakenAtFromImageExif($path);
+    if ($fromExif !== null) {
+        return ['value' => $fromExif, 'source' => 'exif'];
+    }
+
+    if ($isRaw) {
+        $fromRaw = resolveTakenAtFromRawExiftool($path);
+        if ($fromRaw !== null) {
+            return ['value' => $fromRaw, 'source' => 'exiftool'];
+        }
+    }
+
+    $modifiedAt = @filemtime($path);
+    if ($modifiedAt !== false) {
+        return ['value' => date('Y-m-d H:i:s', $modifiedAt), 'source' => 'filemtime'];
+    }
+
+    return ['value' => null, 'source' => 'unavailable'];
+}
+
+function resolveTakenAtFromImageExif(string $path): ?string
+{
+    if (!function_exists('exif_read_data')) {
+        return null;
+    }
+
+    $exif = @exif_read_data($path, null, true);
+    if (!is_array($exif)) {
+        return null;
+    }
+
+    $value = $exif['EXIF']['DateTimeOriginal'] ?? $exif['EXIF']['DateTimeDigitized'] ?? $exif['IFD0']['DateTime'] ?? null;
+    if (!is_string($value) || trim($value) === '') {
+        return null;
+    }
+
+    return normalizeExifDateTime($value);
+}
+
+function resolveTakenAtFromRawExiftool(string $path): ?string
+{
+    $commands = [
+        sprintf('exiftool -s3 -DateTimeOriginal %s', escapeshellarg($path)),
+        sprintf('exiftool -s3 -CreateDate %s', escapeshellarg($path)),
+    ];
+
+    foreach ($commands as $command) {
+        $output = [];
+        $code = 1;
+        @exec($command, $output, $code);
+        if ($code !== 0 || empty($output)) {
+            continue;
+        }
+
+        $joined = trim(implode(' ', $output));
+        if ($joined !== '') {
+            return normalizeExifDateTime($joined);
+        }
+    }
+
+    return null;
+}
+
+function normalizeExifDateTime(string $value): string
+{
+    $trimmed = trim($value);
+    $normalized = preg_replace('/^(\d{4}):(\d{2}):(\d{2})/', '$1-$2-$3', $trimmed);
+
+    return $normalized ?? $trimmed;
 }
 
 function isSafeFilename(string $name): bool

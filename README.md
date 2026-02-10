@@ -9,12 +9,15 @@ Sony a7C などのカメラから FTP で同一フォルダに集約された写
 - 一覧/詳細の両方でファイル名表示
 - 対応形式: `jpg / jpeg / png / webp / gif` + RAW (`.ARW` など)
 - RAW サムネ生成
-  1. `exiftool` で埋め込みプレビューを抽出（`PreviewImage` → `JpgFromRaw`）
-  2. 失敗時は「サムネなし」を UI で明示
+  1. 同名 JPG/JPEG（例: `DSC0001.ARW` と `DSC0001.JPG`）があればそれを優先利用
+  2. `exiftool` で埋め込みプレビューを抽出（`PreviewImage` → `JpgFromRaw`）
+  3. 失敗時は「サムネなし」を UI で明示
 - `thumbs/` にサムネキャッシュ保存
 - lazy-load、総枚数表示、ローディング表示、壊れた画像の表示
 - 簡易認証（`.env` で Basic 認証）
 - 追加機能: 拡張子フィルタ（すべて / 画像のみ / RAW のみ）
+- 詳細モーダルに「元データをダウンロード」ボタンを追加（RAW はファイル保存向け、画像は長押し保存も可能）
+- 詳細モーダルに撮影日時（EXIF / ExifTool / ファイル更新時刻フォールバック）を表示
 
 ## 技術選定（なぜ PHP か）
 
@@ -60,7 +63,10 @@ php -S 0.0.0.0:8080 -t public
 1. カメラ/FTP の保存先を `photos/` に向ける（例: `DSC0001.JPG`, `DSC0002.ARW`）
 2. 一覧がファイル名の自然順（`1,2,10`）で表示される
 3. クリックするとモーダル表示
-4. RAW は埋め込み JPEG が取れればサムネ表示、不可なら「RAWサムネ生成不可」を表示
+4. RAW は同名 JPG/JPEG があればそれを優先してサムネ・プレビュー表示
+5. 同名 JPG/JPEG が無い場合は埋め込み JPEG 抽出を試行し、不可なら「RAWサムネ生成不可（同名JPG/JPEGまたはExifToolが必要）」を表示
+6. モーダルの「元データをダウンロード」で原本を保存（RAW はファイルとして保存、画像は長押し保存も可）
+7. モーダル下部に撮影日時を小さく表示
 
 ## 認証（必須対策）
 
@@ -90,10 +96,20 @@ Require valid-user
 
 ## RAW サムネ生成の仕様
 
-- 優先 1: `exiftool -b -PreviewImage <RAW>`
-- 優先 2: `exiftool -b -JpgFromRaw <RAW>`
-- 抽出 JPEG を縮小して `thumbs/<sha1(filename)>.jpg` として保存
-- 失敗時は UI で `RAWサムネ生成不可` と表示（ファイル名は一覧される）
+- 優先 1: 同名 JPG/JPEG を利用（`DSC0001.ARW` ↔ `DSC0001.JPG` / `.JPEG`）
+- 優先 2: `exiftool -b -PreviewImage <RAW>`
+- 優先 3: `exiftool -b -JpgFromRaw <RAW>`
+- 抽出 JPEG または同名 JPG/JPEG を縮小して `thumbs/<sha1(filename)>.jpg` として保存
+- 失敗時は UI で `RAWサムネ生成不可（同名JPG/JPEGまたはExifToolが必要）` と表示（ファイル名は一覧される）
+
+### ロリポップでの現実的な対策
+
+ロリポップの共有サーバでは `exiftool` を新規導入できないことが多いです。その場合でも次の運用で改善できます。
+
+1. **カメラを RAW+JPEG 記録にする**（推奨）
+   - 同名 JPG/JPEG が `photos/` に入るため、RAW のサムネ/プレビューとして使えます。
+2. FTP 転送時に JPG も同時送信する
+3. どうしても RAW のみの場合は、サムネ無し表示を許容（本アプリはファイル名表示を維持）
 
 > 注: 本実装は RAW の本格現像は行いません。埋め込みプレビュー優先の軽量設計です。
 
@@ -129,7 +145,8 @@ curl -i http://localhost:8080/api/photos.php
 - `GET /api/photos.php?filter=all|image|raw`
   - `total`, `items[]` を返す
   - `items[]` に `filename`, `thumbnailUrl`, `thumbnailStatus`, `previewUrl` などを含む
-- `GET /api/file.php?name=<filename>` 原画像配信
+- `GET /api/file.php?name=<filename>` 原画像/RAW 配信
+  - `download=1` を付けると `Content-Disposition: attachment` でダウンロード
 - `GET /api/thumb.php?name=<filename>` サムネ配信
 
 ## Assumptions
