@@ -103,6 +103,27 @@ Require valid-user
 - `<img loading="lazy">` で遅延読み込み
 - GD/Imagick が無い環境では通常画像のサムネ生成に失敗し、元画像を一覧表示にフォールバックすることがあります
 
+
+## トラブルシュート（「読み込み失敗: HTTP 404」が出る場合）
+
+以下を順に確認してください。
+
+1. `public/` をドキュメントルートにしているか
+   - ローカルは `php -S 0.0.0.0:8080 -t public`
+2. サブディレクトリ配置の場合
+   - 例: `https://example.com/bare-photos/public/`
+   - 末尾 `/` の有無に関係なく動くよう、ページのベースパスから `.../public/api/...` を解決する実装です。
+3. API 直アクセスで疎通確認
+
+```bash
+curl -i http://localhost:8080/api/photos.php
+```
+
+`HTTP/1.1 200 OK` と JSON が返れば正常です。
+
+4. 認証有効時に 401/404 を取り違えていないか
+   - `.env` で認証を有効化していると、認証なしアクセスは `401 Unauthorized` になります。
+
 ## API
 
 - `GET /api/photos.php?filter=all|image|raw`

@@ -57,6 +57,7 @@ function listPhotos(string $filter = 'all'): array
 function buildPhotoEntry(string $filename, string $extension, bool $isImage, bool $isRaw): array
 {
     $thumbInfo = resolveThumbnail($filename, $extension, $isImage, $isRaw);
+    $apiBase = currentApiBasePath();
 
     return [
         'filename' => $filename,
@@ -66,7 +67,7 @@ function buildPhotoEntry(string $filename, string $extension, bool $isImage, boo
         'thumbnailStatus' => $thumbInfo['status'],
         'thumbnailMessage' => $thumbInfo['message'],
         'previewUrl' => $thumbInfo['previewUrl'],
-        'sourceUrl' => '/api/file.php?name=' . rawurlencode($filename),
+        'sourceUrl' => $apiBase . '/file.php?name=' . rawurlencode($filename),
     ];
 }
 
@@ -76,7 +77,8 @@ function buildPhotoEntry(string $filename, string $extension, bool $isImage, boo
 function resolveThumbnail(string $filename, string $extension, bool $isImage, bool $isRaw): array
 {
     $thumbPath = thumbPath($filename);
-    $thumbUrl = '/api/thumb.php?name=' . rawurlencode($filename);
+    $apiBase = currentApiBasePath();
+    $thumbUrl = $apiBase . '/thumb.php?name=' . rawurlencode($filename);
 
     if (is_file($thumbPath)) {
         $status = 'ready';
@@ -86,10 +88,10 @@ function resolveThumbnail(string $filename, string $extension, bool $isImage, bo
     if ($isImage) {
         $generated = generateThumbnailFromImage(photoPath($filename), $thumbPath);
         if ($generated) {
-            return ['url' => $thumbUrl, 'status' => 'ready', 'message' => '', 'previewUrl' => '/api/file.php?name=' . rawurlencode($filename)];
+            return ['url' => $thumbUrl, 'status' => 'ready', 'message' => '', 'previewUrl' => $apiBase . '/file.php?name=' . rawurlencode($filename)];
         }
 
-        return ['url' => '/api/file.php?name=' . rawurlencode($filename), 'status' => 'fallback-original', 'message' => 'サムネ未生成（元画像表示）', 'previewUrl' => '/api/file.php?name=' . rawurlencode($filename)];
+        return ['url' => $apiBase . '/file.php?name=' . rawurlencode($filename), 'status' => 'fallback-original', 'message' => 'サムネ未生成（元画像表示）', 'previewUrl' => $apiBase . '/file.php?name=' . rawurlencode($filename)];
     }
 
     if ($isRaw) {
@@ -109,6 +111,20 @@ function resolveThumbnail(string $filename, string $extension, bool $isImage, bo
     }
 
     return ['url' => null, 'status' => 'unsupported', 'message' => '未対応形式', 'previewUrl' => null];
+}
+
+
+function currentApiBasePath(): string
+{
+    $scriptName = $_SERVER['SCRIPT_NAME'] ?? '/api/photos.php';
+    $base = str_replace('\\', '/', dirname($scriptName));
+    $base = rtrim($base, '/');
+
+    if ($base === '' || $base === '.') {
+        return '/api';
+    }
+
+    return $base;
 }
 
 function ensureDir(string $path): void

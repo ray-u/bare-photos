@@ -5,6 +5,10 @@ declare(strict_types=1);
 require_once __DIR__ . '/../src/auth.php';
 
 requireAppAuth();
+$appBasePath = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+if ($appBasePath === '' || $appBasePath === '.') {
+    $appBasePath = '';
+}
 ?><!doctype html>
 <html lang="ja">
 <head>
@@ -32,7 +36,7 @@ requireAppAuth();
     button { padding: 6px 10px; border-radius: 8px; border: 1px solid #555; background: #1e2430; color: #fff; cursor: pointer; }
   </style>
 </head>
-<body>
+<body data-app-base="<?= htmlspecialchars($appBasePath, ENT_QUOTES, 'UTF-8') ?>">
   <main class="container">
     <h1>bare-photos</h1>
     <div class="toolbar">
@@ -57,6 +61,7 @@ requireAppAuth();
   </dialog>
 
   <script>
+    const appBase = document.body.dataset.appBase || '';
     const grid = document.getElementById('grid');
     const statusEl = document.getElementById('status');
     const totalEl = document.getElementById('total');
@@ -71,7 +76,7 @@ requireAppAuth();
       grid.innerHTML = '';
 
       try {
-        const res = await fetch(`/api/photos.php?filter=${encodeURIComponent(filter)}`);
+        const res = await fetch(`${appBase}/api/photos.php?filter=${encodeURIComponent(filter)}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         totalEl.textContent = `総枚数: ${data.total}`;
