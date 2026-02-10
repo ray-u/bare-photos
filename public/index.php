@@ -20,15 +20,20 @@ if ($appBasePath === '' || $appBasePath === '.') {
     body { margin: 0; font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6; }
     .container { max-width: 1200px; margin: 0 auto; padding: 16px; }
     .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
-    select { padding: 8px; border-radius: 8px; border: 1px solid #444; background: #1b1f28; color: #fff; }
+    select, button { padding: 8px; border-radius: 8px; border: 1px solid #444; background: #1b1f28; color: #fff; }
     #status { opacity: 0.9; }
     #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
-    .card { background: #171a22; border: 1px solid #2a3040; border-radius: 10px; overflow: hidden; min-height: 170px; display: flex; flex-direction: column; }
-    .thumb-wrap { aspect-ratio: 4 / 3; background: #0a0d12; display: flex; align-items: center; justify-content: center; }
+    .card { position: relative; background: #171a22; border: 1px solid #2a3040; border-radius: 10px; overflow: hidden; min-height: 170px; display: flex; flex-direction: column; }
+    .card-top { position: absolute; top: 6px; left: 6px; right: 6px; display:flex; justify-content: space-between; pointer-events:none; }
+    .pick, .fav { pointer-events:auto; }
+    .fav { border: 1px solid #666; background:#222; color:#ddd; border-radius: 999px; font-size: 12px; padding: 4px 8px; }
+    .fav.active { color: #ffda6a; border-color: #ffda6a; }
+    .thumb-wrap { aspect-ratio: 4 / 3; background: #0a0d12; display: flex; align-items: center; justify-content: center; cursor:pointer; }
     .thumb-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .name { padding: 8px; font-size: 12px; line-break: anywhere; }
     .placeholder { font-size: 12px; padding: 8px; color: #ffcd9b; text-align: center; }
     .broken { color: #ff6f6f; }
+    .star-toggle.active { color: #ffda6a; }
     dialog { border: 1px solid #4d576f; border-radius: 10px; width: min(96vw, 1100px); background: #11151d; color: #fff; }
     dialog::backdrop { background: rgba(0,0,0,.7); }
     .modal-head { display:flex; justify-content: space-between; align-items:center; padding:8px 0; gap: 12px; }
@@ -37,7 +42,7 @@ if ($appBasePath === '' || $appBasePath === '.') {
     .meta { font-size: 12px; opacity: 0.8; text-align: center; }
     .modal-actions { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
     .hint { font-size: 12px; opacity: 0.75; margin: 0; text-align: center; }
-    button, .button-link { padding: 6px 10px; border-radius: 8px; border: 1px solid #555; background: #1e2430; color: #fff; cursor: pointer; text-decoration: none; display: inline-block; }
+    .button-link { padding: 6px 10px; border-radius: 8px; border: 1px solid #555; background: #1e2430; color: #fff; cursor: pointer; text-decoration: none; display: inline-block; }
   </style>
 </head>
 <body data-app-base="<?= htmlspecialchars($appBasePath, ENT_QUOTES, 'UTF-8') ?>">
@@ -50,8 +55,11 @@ if ($appBasePath === '' || $appBasePath === '.') {
         <option value="image">画像のみ</option>
         <option value="raw">RAWのみ</option>
       </select>
+      <button id="favoritesOnlyBtn" type="button">☆ お気に入りのみ: OFF</button>
+      <button id="deleteSelectedBtn" type="button">選択を削除</button>
       <span id="status">読み込み中…</span>
       <span id="total"></span>
+      <span id="selectedCount"></span>
     </div>
     <section id="grid" aria-live="polite"></section>
   </main>
@@ -69,10 +77,16 @@ if ($appBasePath === '' || $appBasePath === '.') {
     const grid = document.getElementById('grid');
     const statusEl = document.getElementById('status');
     const totalEl = document.getElementById('total');
+    const selectedCountEl = document.getElementById('selectedCount');
     const filterEl = document.getElementById('filter');
+    const favoritesOnlyBtn = document.getElementById('favoritesOnlyBtn');
+    const deleteSelectedBtn = document.getElementById('deleteSelectedBtn');
     const viewer = document.getElementById('viewer');
     const viewerName = document.getElementById('viewerName');
     const viewerContent = document.getElementById('viewerContent');
+
+    let favoritesOnly = false;
+    let selected = new Set();
 
     async function loadPhotos() {
       const filter = filterEl.value;
@@ -80,26 +94,99 @@ if ($appBasePath === '' || $appBasePath === '.') {
       grid.innerHTML = '';
 
       try {
-        const res = await fetch(`${appBase}/api/photos.php?filter=${encodeURIComponent(filter)}`);
+        const res = await fetch(`${appBase}/api/photos.php?filter=${encodeURIComponent(filter)}&favorites=${favoritesOnly ? '1' : '0'}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         totalEl.textContent = `総枚数: ${data.total}`;
         statusEl.textContent = data.total === 0 ? '画像がありません。' : '読み込み完了';
 
+        const keep = new Set();
         for (const item of data.items) {
+          if (selected.has(item.path)) keep.add(item.path);
           grid.appendChild(renderCard(item));
         }
+        selected = keep;
+        updateSelectedCount();
       } catch (error) {
         statusEl.textContent = `読み込み失敗: ${error.message}`;
       }
+    }
+
+    function updateSelectedCount() {
+      selectedCountEl.textContent = selected.size > 0 ? `選択: ${selected.size}` : '';
+    }
+
+    function buildDownloadUrl(sourceUrl) {
+      if (!sourceUrl) return '';
+      const separator = sourceUrl.includes('?') ? '&' : '?';
+      return `${sourceUrl}${separator}download=1`;
+    }
+
+    async function toggleFavorite(path, nextFavorite) {
+      const res = await fetch(`${appBase}/api/favorite.php`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({path, favorite: nextFavorite})
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    }
+
+    async function deletePaths(paths) {
+      const res = await fetch(`${appBase}/api/delete.php`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({paths})
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(`削除失敗 (${(data && data.failed && data.failed.length) || 0}件)`);
+      }
+      return data;
     }
 
     function renderCard(item) {
       const card = document.createElement('article');
       card.className = 'card';
 
+      const top = document.createElement('div');
+      top.className = 'card-top';
+
+      const pick = document.createElement('input');
+      pick.className = 'pick';
+      pick.type = 'checkbox';
+      pick.checked = selected.has(item.path);
+      pick.addEventListener('click', (e) => e.stopPropagation());
+      pick.addEventListener('change', () => {
+        if (pick.checked) selected.add(item.path);
+        else selected.delete(item.path);
+        updateSelectedCount();
+      });
+
+      const fav = document.createElement('button');
+      fav.className = `fav ${item.isFavorite ? 'active' : ''}`;
+      fav.textContent = item.isFavorite ? '★' : '☆';
+      fav.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const next = !item.isFavorite;
+        try {
+          await toggleFavorite(item.path, next);
+          item.isFavorite = next;
+          fav.className = `fav ${item.isFavorite ? 'active' : ''}`;
+          fav.textContent = item.isFavorite ? '★' : '☆';
+          if (favoritesOnly && !item.isFavorite) {
+            card.remove();
+          }
+        } catch (error) {
+          alert(`お気に入り更新に失敗: ${error.message}`);
+        }
+      });
+
+      top.appendChild(pick);
+      top.appendChild(fav);
+
       const thumbWrap = document.createElement('div');
       thumbWrap.className = 'thumb-wrap';
+      thumbWrap.addEventListener('click', () => openViewer(item));
 
       if (item.thumbnailUrl) {
         const img = document.createElement('img');
@@ -118,16 +205,10 @@ if ($appBasePath === '' || $appBasePath === '.') {
       name.className = 'name';
       name.textContent = item.filename;
 
+      card.appendChild(top);
       card.appendChild(thumbWrap);
       card.appendChild(name);
-      card.addEventListener('click', () => openViewer(item));
       return card;
-    }
-
-    function buildDownloadUrl(sourceUrl) {
-      if (!sourceUrl) return '';
-      const separator = sourceUrl.includes('?') ? '&' : '?';
-      return `${sourceUrl}${separator}download=1`;
     }
 
     function openViewer(item) {
@@ -161,8 +242,24 @@ if ($appBasePath === '' || $appBasePath === '.') {
       downloadLink.className = 'button-link';
       downloadLink.href = buildDownloadUrl(item.sourceUrl);
       downloadLink.textContent = '元データをダウンロード';
-      downloadLink.setAttribute('download', item.filename);
+      downloadLink.setAttribute('download', item.basename || item.filename);
       actions.appendChild(downloadLink);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = 'この写真を削除';
+      deleteBtn.addEventListener('click', async () => {
+        if (!confirm('本当に削除してよろしいですか？')) return;
+        try {
+          await deletePaths([item.path]);
+          viewer.close();
+          selected.delete(item.path);
+          await loadPhotos();
+        } catch (error) {
+          alert(error.message);
+        }
+      });
+      actions.appendChild(deleteBtn);
+
       viewerContent.appendChild(actions);
 
       if (item.type === 'image') {
@@ -179,7 +276,32 @@ if ($appBasePath === '' || $appBasePath === '.') {
     viewer.addEventListener('click', (event) => {
       if (event.target === viewer) viewer.close();
     });
+
     filterEl.addEventListener('change', loadPhotos);
+
+    favoritesOnlyBtn.addEventListener('click', async () => {
+      favoritesOnly = !favoritesOnly;
+      favoritesOnlyBtn.textContent = `☆ お気に入りのみ: ${favoritesOnly ? 'ON' : 'OFF'}`;
+      await loadPhotos();
+    });
+
+    deleteSelectedBtn.addEventListener('click', async () => {
+      if (selected.size === 0) {
+        alert('削除する写真を選択してください。');
+        return;
+      }
+      if (!confirm(`本当に削除してよろしいですか？\n選択中: ${selected.size} 件`)) {
+        return;
+      }
+
+      try {
+        await deletePaths(Array.from(selected));
+        selected.clear();
+        await loadPhotos();
+      } catch (error) {
+        alert(error.message);
+      }
+    });
 
     loadPhotos();
   </script>

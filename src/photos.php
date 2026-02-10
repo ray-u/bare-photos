@@ -10,21 +10,29 @@ const RAW_EXTENSIONS = ['arw', 'cr2', 'cr3', 'nef', 'dng', 'rw2', 'orf'];
 /**
  * @return array<int, array<string,mixed>>
  */
-function listPhotos(string $filter = 'all'): array
+function listPhotos(string $filter = 'all', bool $favoritesOnly = false): array
 {
     ensureDir(PHOTO_DIR);
     ensureDir(THUMB_DIR);
 
+    $favorites = loadFavoritesSet();
     $items = [];
-    $iterator = new DirectoryIterator(PHOTO_DIR);
+
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator(PHOTO_DIR, FilesystemIterator::SKIP_DOTS)
+    );
 
     foreach ($iterator as $entry) {
-        if ($entry->isDot() || !$entry->isFile()) {
+        if (!$entry->isFile()) {
             continue;
         }
 
-        $filename = $entry->getFilename();
-        $extension = strtolower($entry->getExtension());
+        $relativePath = relativePhotoPathFromAbsolute($entry->getPathname());
+        if ($relativePath === null) {
+            continue;
+        }
+
+        $extension = strtolower(pathinfo($relativePath, PATHINFO_EXTENSION));
         $isImage = in_array($extension, VIEWABLE_IMAGE_EXTENSIONS, true);
         $isRaw = in_array($extension, RAW_EXTENSIONS, true);
 
@@ -40,7 +48,11 @@ function listPhotos(string $filter = 'all'): array
             continue;
         }
 
-        $items[] = buildPhotoEntry($filename, $extension, $isImage, $isRaw);
+        if ($favoritesOnly && !isset($favorites[$relativePath])) {
+            continue;
+        }
+
+        $items[] = buildPhotoEntry($relativePath, $extension, $isImage, $isRaw, isset($favorites[$relativePath]));
     }
 
     usort(
@@ -54,64 +66,77 @@ function listPhotos(string $filter = 'all'): array
 /**
  * @return array<string,mixed>
  */
-function buildPhotoEntry(string $filename, string $extension, bool $isImage, bool $isRaw): array
+function buildPhotoEntry(string $relativePath, string $extension, bool $isImage, bool $isRaw, bool $isFavorite): array
 {
-    $thumbInfo = resolveThumbnail($filename, $extension, $isImage, $isRaw);
+    $thumbInfo = resolveThumbnail($relativePath, $isImage, $isRaw);
     $apiBase = currentApiBasePath();
-    $takenAt = resolveTakenAt($filename, $isRaw);
+    $takenAt = resolveTakenAt($relativePath, $isRaw);
 
     return [
-        'filename' => $filename,
+        'filename' => $relativePath,
+        'basename' => basename($relativePath),
         'extension' => $extension,
         'type' => $isRaw ? 'raw' : 'image',
         'thumbnailUrl' => $thumbInfo['url'],
         'thumbnailStatus' => $thumbInfo['status'],
         'thumbnailMessage' => $thumbInfo['message'],
         'previewUrl' => $thumbInfo['previewUrl'],
-        'sourceUrl' => $apiBase . '/file.php?name=' . rawurlencode($filename),
+        'sourceUrl' => $apiBase . '/file.php?path=' . rawurlencode($relativePath),
+        'path' => $relativePath,
         'takenAt' => $takenAt,
+        'isFavorite' => $isFavorite,
     ];
 }
 
 /**
  * @return array{url:?string,status:string,message:string,previewUrl:?string}
  */
-function resolveThumbnail(string $filename, string $extension, bool $isImage, bool $isRaw): array
+function resolveThumbnail(string $relativePath, bool $isImage, bool $isRaw): array
 {
-    $thumbPath = thumbPath($filename);
+    $thumbPath = thumbPath($relativePath);
     $apiBase = currentApiBasePath();
-    $thumbUrl = $apiBase . '/thumb.php?name=' . rawurlencode($filename);
+    $thumbUrl = $apiBase . '/thumb.php?path=' . rawurlencode($relativePath);
 
     if (is_file($thumbPath)) {
-        $status = 'ready';
         $previewUrl = $thumbUrl;
         if ($isRaw) {
-            $sidecarPreview = findSidecarPreviewImage($filename);
+            $sidecarPreview = findSidecarPreviewImage($relativePath);
             if ($sidecarPreview !== null) {
-                $previewUrl = $apiBase . '/file.php?name=' . rawurlencode($sidecarPreview);
+                $previewUrl = $apiBase . '/file.php?path=' . rawurlencode($sidecarPreview);
             }
         }
-        return ['url' => $thumbUrl, 'status' => $status, 'message' => '', 'previewUrl' => $previewUrl];
+
+        return ['url' => $thumbUrl, 'status' => 'ready', 'message' => '', 'previewUrl' => $previewUrl];
     }
 
     if ($isImage) {
-        $generated = generateThumbnailFromImage(photoPath($filename), $thumbPath);
+        $generated = generateThumbnailFromImage(photoPath($relativePath), $thumbPath);
         if ($generated) {
-            return ['url' => $thumbUrl, 'status' => 'ready', 'message' => '', 'previewUrl' => $apiBase . '/file.php?name=' . rawurlencode($filename)];
+            return [
+                'url' => $thumbUrl,
+                'status' => 'ready',
+                'message' => '',
+                'previewUrl' => $apiBase . '/file.php?path=' . rawurlencode($relativePath),
+            ];
         }
 
-        return ['url' => $apiBase . '/file.php?name=' . rawurlencode($filename), 'status' => 'fallback-original', 'message' => 'サムネ未生成（元画像表示）', 'previewUrl' => $apiBase . '/file.php?name=' . rawurlencode($filename)];
+        return [
+            'url' => $apiBase . '/file.php?path=' . rawurlencode($relativePath),
+            'status' => 'fallback-original',
+            'message' => 'サムネ未生成（元画像表示）',
+            'previewUrl' => $apiBase . '/file.php?path=' . rawurlencode($relativePath),
+        ];
     }
 
     if ($isRaw) {
-        $rawPath = photoPath($filename);
-        $generated = generateThumbnailFromRaw($filename, $rawPath, $thumbPath);
+        $generated = generateThumbnailFromRaw($relativePath, photoPath($relativePath), $thumbPath);
 
         if ($generated['generated']) {
             $previewUrl = $thumbUrl;
-            if ($generated['previewFilename'] !== null) {
-                $previewUrl = $apiBase . '/file.php?name=' . rawurlencode($generated['previewFilename']);
+            if ($generated['previewPath'] !== null) {
+                $previewUrl = $apiBase . '/file.php?path=' . rawurlencode($generated['previewPath']);
             }
+
             return ['url' => $thumbUrl, 'status' => 'ready', 'message' => '', 'previewUrl' => $previewUrl];
         }
 
@@ -125,7 +150,6 @@ function resolveThumbnail(string $filename, string $extension, bool $isImage, bo
 
     return ['url' => null, 'status' => 'unsupported', 'message' => '未対応形式', 'previewUrl' => null];
 }
-
 
 function currentApiBasePath(): string
 {
@@ -147,14 +171,14 @@ function ensureDir(string $path): void
     }
 }
 
-function photoPath(string $filename): string
+function photoPath(string $relativePath): string
 {
-    return PHOTO_DIR . '/' . $filename;
+    return PHOTO_DIR . '/' . $relativePath;
 }
 
-function thumbPath(string $filename): string
+function thumbPath(string $relativePath): string
 {
-    return THUMB_DIR . '/' . sha1($filename) . '.jpg';
+    return THUMB_DIR . '/' . sha1($relativePath) . '.jpg';
 }
 
 function generateThumbnailFromImage(string $sourcePath, string $targetPath): bool
@@ -227,18 +251,18 @@ function downscaleSize(int $width, int $height, int $maxEdge): array
 }
 
 /**
- * @return array{generated:bool,previewFilename:?string}
+ * @return array{generated:bool,previewPath:?string}
  */
-function generateThumbnailFromRaw(string $rawFilename, string $rawPath, string $targetPath): array
+function generateThumbnailFromRaw(string $rawRelativePath, string $rawPath, string $targetPath): array
 {
-    $sidecarPreview = findSidecarPreviewImage($rawFilename);
+    $sidecarPreview = findSidecarPreviewImage($rawRelativePath);
     if ($sidecarPreview !== null && generateThumbnailFromImage(photoPath($sidecarPreview), $targetPath)) {
-        return ['generated' => true, 'previewFilename' => $sidecarPreview];
+        return ['generated' => true, 'previewPath' => $sidecarPreview];
     }
 
     $tempPreview = tempnam(sys_get_temp_dir(), 'raw_preview_');
     if ($tempPreview === false) {
-        return ['generated' => false, 'previewFilename' => null];
+        return ['generated' => false, 'previewPath' => null];
     }
 
     $commands = [
@@ -250,26 +274,33 @@ function generateThumbnailFromRaw(string $rawFilename, string $rawPath, string $
         $output = [];
         $code = 1;
         @exec($command, $output, $code);
+
         if ($code === 0 && is_file($tempPreview) && filesize($tempPreview) > 0 && @getimagesize($tempPreview)) {
             $generated = generateThumbnailFromImage($tempPreview, $targetPath);
             @unlink($tempPreview);
             if ($generated) {
-                return ['generated' => true, 'previewFilename' => null];
+                return ['generated' => true, 'previewPath' => null];
             }
         }
+
         file_put_contents($tempPreview, '');
     }
 
     @unlink($tempPreview);
 
-    return ['generated' => false, 'previewFilename' => null];
+    return ['generated' => false, 'previewPath' => null];
 }
 
-function findSidecarPreviewImage(string $rawFilename): ?string
+function findSidecarPreviewImage(string $rawRelativePath): ?string
 {
-    $baseName = pathinfo($rawFilename, PATHINFO_FILENAME);
+    $dir = dirname($rawRelativePath);
+    if ($dir === '.') {
+        $dir = '';
+    }
+
+    $baseName = pathinfo($rawRelativePath, PATHINFO_FILENAME);
     foreach (['jpg', 'jpeg', 'JPG', 'JPEG'] as $extension) {
-        $candidate = $baseName . '.' . $extension;
+        $candidate = ($dir !== '' ? $dir . '/' : '') . $baseName . '.' . $extension;
         if (is_file(photoPath($candidate))) {
             return $candidate;
         }
@@ -281,9 +312,10 @@ function findSidecarPreviewImage(string $rawFilename): ?string
 /**
  * @return array{value:?string,source:string}
  */
-function resolveTakenAt(string $filename, bool $isRaw): array
+function resolveTakenAt(string $relativePath, bool $isRaw): array
 {
-    $path = photoPath($filename);
+    $path = photoPath($relativePath);
+
     $fromExif = resolveTakenAtFromImageExif($path);
     if ($fromExif !== null) {
         return ['value' => $fromExif, 'source' => 'exif'];
@@ -355,11 +387,168 @@ function normalizeExifDateTime(string $value): string
     return $normalized ?? $trimmed;
 }
 
-function isSafeFilename(string $name): bool
+function relativePhotoPathFromAbsolute(string $absolutePath): ?string
 {
-    if ($name === '' || str_contains($name, '..') || str_contains($name, '/')) {
-        return false;
+    $normalized = str_replace('\\', '/', $absolutePath);
+    $prefix = str_replace('\\', '/', PHOTO_DIR) . '/';
+
+    if (!str_starts_with($normalized, $prefix)) {
+        return null;
     }
 
-    return preg_match('/^[[:print:]]+$/u', $name) === 1;
+    return substr($normalized, strlen($prefix));
+}
+
+function normalizeRelativePhotoPath(string $path): ?string
+{
+    $normalized = trim(str_replace('\\', '/', $path));
+    $normalized = ltrim($normalized, '/');
+
+    if ($normalized === '' || str_contains($normalized, "\0")) {
+        return null;
+    }
+
+    if (preg_match('#(^|/)\.\.?(/|$)#', $normalized) === 1) {
+        return null;
+    }
+
+    $segments = explode('/', $normalized);
+    foreach ($segments as $segment) {
+        if ($segment === '' || $segment === '.' || $segment === '..') {
+            return null;
+        }
+    }
+
+    return $normalized;
+}
+
+function resolvePhotoPathFromRequest(string $paramPath): ?string
+{
+    $normalized = normalizeRelativePhotoPath($paramPath);
+    if ($normalized === null) {
+        return null;
+    }
+
+    $fullPath = photoPath($normalized);
+    if (!is_file($fullPath)) {
+        return null;
+    }
+
+    $realPhotoDir = realpath(PHOTO_DIR);
+    $realFilePath = realpath($fullPath);
+    if ($realPhotoDir === false || $realFilePath === false) {
+        return null;
+    }
+
+    $realPhotoDir = str_replace('\\', '/', $realPhotoDir);
+    $realFilePath = str_replace('\\', '/', $realFilePath);
+
+    if (!str_starts_with($realFilePath, $realPhotoDir . '/')) {
+        return null;
+    }
+
+    return $normalized;
+}
+
+function isSafeFilename(string $name): bool
+{
+    return normalizeRelativePhotoPath($name) !== null;
+}
+
+/**
+ * @return array<string,bool>
+ */
+function loadFavoritesSet(): array
+{
+    ensureDir(FAVORITE_DIR);
+
+    if (!is_file(FAVORITES_FILE)) {
+        return [];
+    }
+
+    $raw = file_get_contents(FAVORITES_FILE);
+    if (!is_string($raw) || $raw === '') {
+        return [];
+    }
+
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+        return [];
+    }
+
+    $set = [];
+    foreach ($decoded as $value) {
+        if (!is_string($value)) {
+            continue;
+        }
+        $normalized = normalizeRelativePhotoPath($value);
+        if ($normalized !== null) {
+            $set[$normalized] = true;
+        }
+    }
+
+    return $set;
+}
+
+/**
+ * @param array<string,bool> $set
+ */
+function saveFavoritesSet(array $set): bool
+{
+    ensureDir(FAVORITE_DIR);
+
+    $items = array_keys($set);
+    sort($items, SORT_NATURAL | SORT_FLAG_CASE);
+
+    return file_put_contents(FAVORITES_FILE, json_encode($items, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) !== false;
+}
+
+function setFavorite(string $relativePath, bool $favorite): bool
+{
+    $set = loadFavoritesSet();
+
+    if ($favorite) {
+        $set[$relativePath] = true;
+    } else {
+        unset($set[$relativePath]);
+    }
+
+    return saveFavoritesSet($set);
+}
+
+/**
+ * @param array<int,string> $paths
+ * @return array{deleted:array<int,string>,failed:array<int,string>}
+ */
+function deletePhotos(array $paths): array
+{
+    $deleted = [];
+    $failed = [];
+    $favorites = loadFavoritesSet();
+
+    foreach ($paths as $path) {
+        $normalized = resolvePhotoPathFromRequest($path);
+        if ($normalized === null) {
+            $failed[] = $path;
+            continue;
+        }
+
+        $fullPath = photoPath($normalized);
+        if (!@unlink($fullPath)) {
+            $failed[] = $normalized;
+            continue;
+        }
+
+        $thumbPath = thumbPath($normalized);
+        if (is_file($thumbPath)) {
+            @unlink($thumbPath);
+        }
+
+        unset($favorites[$normalized]);
+        $deleted[] = $normalized;
+    }
+
+    saveFavoritesSet($favorites);
+
+    return ['deleted' => $deleted, 'failed' => $failed];
 }

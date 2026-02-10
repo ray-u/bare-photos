@@ -12,12 +12,14 @@ if (!in_array($filter, ['all', 'raw', 'image'], true)) {
     $filter = 'all';
 }
 
-$photos = listPhotos($filter);
+$favoritesOnly = isset($_GET['favorites']) && $_GET['favorites'] === '1';
+$photos = listPhotos($filter, $favoritesOnly);
 
 header('Content-Type: application/json; charset=utf-8');
 
 echo json_encode([
     'total' => count($photos),
     'filter' => $filter,
+    'favoritesOnly' => $favoritesOnly,
     'items' => $photos,
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

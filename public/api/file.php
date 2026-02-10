@@ -7,25 +7,22 @@ require_once __DIR__ . '/../../src/photos.php';
 
 requireAppAuth();
 
-$name = $_GET['name'] ?? '';
-if (!isSafeFilename($name)) {
-    http_response_code(400);
-    exit('invalid filename');
-}
-
-$path = photoPath($name);
-if (!is_file($path)) {
+$inputPath = (string) ($_GET['path'] ?? $_GET['name'] ?? '');
+$relativePath = resolvePhotoPathFromRequest($inputPath);
+if ($relativePath === null) {
     http_response_code(404);
     exit('not found');
 }
 
+$path = photoPath($relativePath);
 $mime = mime_content_type($path) ?: 'application/octet-stream';
 $download = isset($_GET['download']) && $_GET['download'] === '1';
-$asciiFilename = addcslashes($name, "\"\\");
+$displayName = basename($relativePath);
+$asciiFilename = addcslashes($displayName, "\"\\");
 
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . (string) filesize($path));
 if ($download) {
-    header('Content-Disposition: attachment; filename="' . $asciiFilename . '"; filename*=UTF-8\'\'' . rawurlencode($name));
+    header('Content-Disposition: attachment; filename="' . $asciiFilename . '"; filename*=UTF-8\'\'' . rawurlencode($displayName));
 }
 readfile($path);

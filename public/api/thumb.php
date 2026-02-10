@@ -7,13 +7,14 @@ require_once __DIR__ . '/../../src/photos.php';
 
 requireAppAuth();
 
-$name = $_GET['name'] ?? '';
-if (!isSafeFilename($name)) {
+$inputPath = (string) ($_GET['path'] ?? $_GET['name'] ?? '');
+$normalizedPath = normalizeRelativePhotoPath($inputPath);
+if ($normalizedPath === null) {
     http_response_code(400);
-    exit('invalid filename');
+    exit('invalid path');
 }
 
-$path = thumbPath($name);
+$path = thumbPath($normalizedPath);
 if (!is_file($path)) {
     http_response_code(404);
     exit('thumbnail not found');

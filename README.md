@@ -4,7 +4,7 @@ Sony a7C などのカメラから FTP で同一フォルダに集約された写
 
 ## この実装でできること
 
-- `./photos/` を走査して、**ファイル名の自然順昇順**で一覧表示
+- `./photos/` を再帰走査して、サブフォルダ内も含めて**ファイル名パスの自然順昇順**で一覧表示
 - サムネグリッド表示 + クリックでモーダル拡大
 - 一覧/詳細の両方でファイル名表示
 - 対応形式: `jpg / jpeg / png / webp / gif` + RAW (`.ARW` など)
@@ -16,6 +16,9 @@ Sony a7C などのカメラから FTP で同一フォルダに集約された写
 - lazy-load、総枚数表示、ローディング表示、壊れた画像の表示
 - 簡易認証（`.env` で Basic 認証）
 - 追加機能: 拡張子フィルタ（すべて / 画像のみ / RAW のみ）
+- お気に入り（★）機能 + お気に入りのみ表示フィルタ
+- 単体削除（詳細モーダル）+ 複数選択削除（一覧チェックボックス）
+- 削除前の確認ダイアログ
 - 詳細モーダルに「元データをダウンロード」ボタンを追加（RAW はファイル保存向け、画像は長押し保存も可能）
 - 詳細モーダルに撮影日時（EXIF / ExifTool / ファイル更新時刻フォールバック）を表示
 
@@ -43,6 +46,7 @@ bare-photos/
 │  └─ photos.php
 ├─ photos/      # FTP 取り込み先（原本）
 ├─ thumbs/      # 生成サムネ
+├─ data/        # お気に入り情報（favorites.json）
 ├─ .env.example
 └─ README.md
 ```
@@ -52,7 +56,7 @@ bare-photos/
 ```bash
 cd /workspace/bare-photos
 cp .env.example .env
-mkdir -p photos thumbs
+mkdir -p photos thumbs data
 php -S 0.0.0.0:8080 -t public
 ```
 
@@ -60,13 +64,15 @@ php -S 0.0.0.0:8080 -t public
 
 ## 使い方
 
-1. カメラ/FTP の保存先を `photos/` に向ける（例: `DSC0001.JPG`, `DSC0002.ARW`）
-2. 一覧がファイル名の自然順（`1,2,10`）で表示される
-3. クリックするとモーダル表示
-4. RAW は同名 JPG/JPEG があればそれを優先してサムネ・プレビュー表示
-5. 同名 JPG/JPEG が無い場合は埋め込み JPEG 抽出を試行し、不可なら「RAWサムネ生成不可（同名JPG/JPEGまたはExifToolが必要）」を表示
-6. モーダルの「元データをダウンロード」で原本を保存（RAW はファイルとして保存、画像は長押し保存も可）
-7. モーダル下部に撮影日時を小さく表示
+1. カメラ/FTP の保存先を `photos/` に向ける（サブフォルダ配下も表示対象）
+2. 一覧がファイル名パスの自然順（`a/1, a/2, a/10`）で表示される
+3. サムネ右上の `☆/★` でお気に入りを切り替え、ツールバーの「お気に入りのみ」で絞り込み
+4. チェックボックス選択 + 「選択を削除」で複数削除（確認ダイアログあり）
+5. クリックするとモーダル表示。モーダルから単体削除も可能（確認ダイアログあり）
+6. RAW は同名 JPG/JPEG があればそれを優先してサムネ・プレビュー表示
+7. 同名 JPG/JPEG が無い場合は埋め込み JPEG 抽出を試行し、不可なら「RAWサムネ生成不可（同名JPG/JPEGまたはExifToolが必要）」を表示
+8. モーダルの「元データをダウンロード」で原本を保存（RAW はファイルとして保存、画像は長押し保存も可）
+9. モーダル下部に撮影日時を小さく表示
 
 ## 認証（必須対策）
 
@@ -142,12 +148,16 @@ curl -i http://localhost:8080/api/photos.php
 
 ## API
 
-- `GET /api/photos.php?filter=all|image|raw`
-  - `total`, `items[]` を返す
-  - `items[]` に `filename`, `thumbnailUrl`, `thumbnailStatus`, `previewUrl` などを含む
-- `GET /api/file.php?name=<filename>` 原画像/RAW 配信
+- `GET /api/photos.php?filter=all|image|raw&favorites=0|1`
+  - `total`, `items[]`, `favoritesOnly` を返す
+  - `items[]` に `path`, `filename`, `isFavorite`, `thumbnailUrl`, `previewUrl` などを含む
+- `GET /api/file.php?path=<relative_path>` 原画像/RAW 配信（`name` 互換も維持）
   - `download=1` を付けると `Content-Disposition: attachment` でダウンロード
-- `GET /api/thumb.php?name=<filename>` サムネ配信
+- `GET /api/thumb.php?path=<relative_path>` サムネ配信（`name` 互換も維持）
+- `POST /api/favorite.php` お気に入り切替
+  - body: `{ "path": "sub/DSC0001.ARW", "favorite": true|false }`
+- `POST /api/delete.php` 単体/複数削除
+  - body: `{ "paths": ["a.jpg", "sub/b.ARW"] }`
 
 ## Assumptions
 

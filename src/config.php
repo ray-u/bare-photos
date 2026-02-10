@@ -7,6 +7,8 @@ loadDotEnv(__DIR__ . '/../.env');
 
 const PHOTO_DIR = __DIR__ . '/../photos';
 const THUMB_DIR = __DIR__ . '/../thumbs';
+const FAVORITE_DIR = __DIR__ . '/../data';
+const FAVORITES_FILE = FAVORITE_DIR . '/favorites.json';
 const THUMB_MAX_EDGE = 480;
 
 /**
