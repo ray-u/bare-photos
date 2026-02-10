@@ -1,0 +1,7 @@
+.env
+/photos/*
+!/photos/.gitkeep
+/thumbs/*
+!/thumbs/.gitkeep
+/data/*
+!/data/.gitkeep
